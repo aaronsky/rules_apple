@@ -1,3 +1,4 @@
+load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:objc_library.bzl", "objc_library")
@@ -37,6 +38,10 @@ load(
     "apple_bundle_version",
 )
 load(
+    "//apple/testing/default_runner:apple_xctestrun_runner.bzl",
+    "apple_xctestrun_runner",
+)
+load(
     "//test/starlark_tests:common.bzl",
     "common",
 )
@@ -61,6 +66,18 @@ package(
 # since most of them do not have any source dependencies, so they are all tagged as manual and
 # notap to avoid them being built/tested when testing the
 # //test/... package.
+
+xcode_config(
+    name = "empty_xcode_config",
+    testonly = False,
+    tags = common.fixture_tags,
+    visibility = ["//visibility:public"],
+)
+
+apple_xctestrun_runner(
+    name = "apple_xctestrun_runner_empty_xcode_config",
+    tags = common.fixture_tags,
+)
 
 apple_bundle_version(
     name = "manual_1_2_build_1_2_3_version",
