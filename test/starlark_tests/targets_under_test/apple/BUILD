@@ -79,6 +79,11 @@ apple_xctestrun_runner(
     tags = common.fixture_tags,
 )
 
+apple_xctestrun_runner(
+    name = "apple_xctestrun_runner_platform_config",
+    tags = common.fixture_tags,
+)
+
 apple_bundle_version(
     name = "manual_1_2_build_1_2_3_version",
     build_version = "1.2.3",

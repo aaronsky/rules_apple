@@ -66,11 +66,21 @@ bzl_library(
 )
 
 exports_files([
-    "apple_xctestrun_runner.template.sh",
-    "apple_xctestrun_runner.template.xctestrun",
     "ios_test_runner.template.sh",
     "xctrunner_entitlements.template.plist",
 ])
+
+py_binary(
+    name = "apple_xctestrun_runner_binary",
+    srcs = ["apple_xctestrun_runner.py"],
+    main = "apple_xctestrun_runner.py",
+    python_version = "PY3",
+    srcs_version = "PY3",
+    # Used by the rule implementations, so it needs to be public; but
+    # should be considered an implementation detail of the rules and
+    # not used by other things.
+    visibility = ["//visibility:public"],
+)
 
 py_binary(
     name = "simulator_creator",

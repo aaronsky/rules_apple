@@ -480,8 +480,16 @@ Optional dictionary with the environment variables that are to be propagated int
 invocation. These values will be included in the %(test_env)s substitution and will _not_ be set in
 the test action.
 """,
+        "test_runner_binary": """
+Optional executable file that contains the specific mechanism with which the tests will be run. Test
+rules will invoke this binary with runner and test configuration files.
+""",
+        "test_runner_static_config": """
+Optional JSON configuration file containing runner-level settings. This is passed to
+`test_runner_binary` when both are provided.
+""",
         "test_runner_template": """
-Required template file that contains the specific mechanism with which the tests will be run. The
+Optional template file that contains the specific mechanism with which the tests will be run. The
 *_ui_test and *_unit_test rules will substitute the following values:
     * %(test_host_path)s:   Path to the app being tested.
     * %(test_bundle_path)s: Path to the test bundle that contains the tests.
@@ -505,10 +513,15 @@ def make_apple_test_runner_info(**kwargs):
     Returns:
         A new `AppleTestRunnerInfo` provider based on the supplied arguments.
     """
-    if "test_runner_template" not in kwargs or not kwargs["test_runner_template"]:
+    has_template = kwargs.get("test_runner_template")
+    has_runner_binary = kwargs.get("test_runner_binary")
+    has_runner_static_config = kwargs.get("test_runner_static_config")
+    if not has_template and not (has_runner_binary and has_runner_static_config):
         fail("""
-Error: Could not find the required argument "test_runner_template" needed to build an
-AppleTestRunner provider.
+Error: Could not find a runner implementation needed to build an AppleTestRunner provider.
+
+Provide either "test_runner_template" or both "test_runner_binary" and
+"test_runner_static_config".
 
 Received the following arguments for make_apple_test_runner_info: {kwargs}
 """.format(kwargs = ", ".join(kwargs.keys())))

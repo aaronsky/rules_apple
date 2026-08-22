@@ -162,6 +162,46 @@ def _get_template_substitutions(
     }
     return {"%(" + k + ")s": substitutions[k] for k in substitutions}
 
+def _get_test_runner_config(
+        *,
+        test_bundle,
+        test_bundle_dossier = None,
+        test_coverage_manifest = None,
+        test_env_inherit,
+        test_environment,
+        test_filter = None,
+        test_host_artifact = None,
+        test_host_bundle_name = "",
+        test_host_dossier = None,
+        test_minimum_os_version,
+        test_type):
+    return {
+        "test_bundle_dossier_path": test_bundle_dossier.short_path if test_bundle_dossier else "",
+        "test_bundle_path": test_bundle.short_path,
+        "test_coverage_manifest": test_coverage_manifest.short_path if test_coverage_manifest else "",
+        "test_env": test_environment,
+        "test_env_inherit": test_env_inherit,
+        "test_filter": test_filter or "",
+        "test_host_bundle_name": test_host_bundle_name,
+        "test_host_dossier_path": test_host_dossier.short_path if test_host_dossier else "",
+        "test_host_path": test_host_artifact.short_path if test_host_artifact else "",
+        "test_minimum_os_version": test_minimum_os_version,
+        "test_type": test_type.upper(),
+    }
+
+def _write_test_runner_binary_launcher(*, ctx, executable, runner_info, test_config):
+    ctx.actions.write(
+        output = executable,
+        content = """#!/bin/bash
+exec {runner_binary} --runner-config {runner_config} --test-config {test_config} "$@"
+""".format(
+            runner_binary = shell.quote(runner_info.test_runner_binary.short_path),
+            runner_config = shell.quote(runner_info.test_runner_static_config.short_path),
+            test_config = shell.quote(test_config.short_path),
+        ),
+        is_executable = True,
+    )
+
 def _get_coverage_execution_environment(*, covered_binaries):
     """Returns environment variables required for test coverage support.
 
@@ -359,24 +399,51 @@ def _apple_test_rule_impl(*, ctx, requires_dossiers, test_type):
         ])
 
     executable = ctx.actions.declare_file("%s" % ctx.label.name)
-    ctx.actions.expand_template(
-        template = runner_info.test_runner_template,
-        output = executable,
-        substitutions = _get_template_substitutions(
-            test_bundle = test_bundle,
-            test_bundle_dossier = test_bundle_dossier,
-            test_coverage_manifest = test_coverage_manifest,
-            test_env_inherit = ctx.attr.env_inherit,
-            test_environment = test_environment,
-            test_filter = ctx.attr.test_filter,
-            test_host_artifact = test_host_artifact,
-            test_host_bundle_name = test_host_bundle_name,
-            test_host_dossier = test_host_dossier,
-            test_minimum_os_version = ctx.attr.minimum_os_version,
-            test_type = test_type,
-        ),
-        is_executable = True,
-    )
+    test_runner_binary = getattr(runner_info, "test_runner_binary", None)
+    if test_runner_binary:
+        test_config = ctx.actions.declare_file("%s.test_runner_config.json" % ctx.label.name)
+        ctx.actions.write(
+            output = test_config,
+            content = json.encode(_get_test_runner_config(
+                test_bundle = test_bundle,
+                test_bundle_dossier = test_bundle_dossier,
+                test_coverage_manifest = test_coverage_manifest,
+                test_env_inherit = ctx.attr.env_inherit,
+                test_environment = test_environment,
+                test_filter = ctx.attr.test_filter,
+                test_host_artifact = test_host_artifact,
+                test_host_bundle_name = test_host_bundle_name,
+                test_host_dossier = test_host_dossier,
+                test_minimum_os_version = ctx.attr.minimum_os_version,
+                test_type = test_type,
+            )),
+        )
+        direct_runfiles.append(test_config)
+        _write_test_runner_binary_launcher(
+            ctx = ctx,
+            executable = executable,
+            runner_info = runner_info,
+            test_config = test_config,
+        )
+    else:
+        ctx.actions.expand_template(
+            template = runner_info.test_runner_template,
+            output = executable,
+            substitutions = _get_template_substitutions(
+                test_bundle = test_bundle,
+                test_bundle_dossier = test_bundle_dossier,
+                test_coverage_manifest = test_coverage_manifest,
+                test_env_inherit = ctx.attr.env_inherit,
+                test_environment = test_environment,
+                test_filter = ctx.attr.test_filter,
+                test_host_artifact = test_host_artifact,
+                test_host_bundle_name = test_host_bundle_name,
+                test_host_dossier = test_host_dossier,
+                test_minimum_os_version = ctx.attr.minimum_os_version,
+                test_type = test_type,
+            ),
+            is_executable = True,
+        )
 
     transitive_runfile_objects = [
         runner_attr.default_runfiles,

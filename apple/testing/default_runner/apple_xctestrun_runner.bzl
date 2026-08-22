@@ -12,7 +12,7 @@ load(
     "apple_provider",
 )
 
-def _get_template_substitutions(
+def _get_runner_config(
         *,
         attachment_lifetime,
         clean_up_simulator_action_binary,
@@ -36,9 +36,8 @@ def _get_template_substitutions(
         visionos_sdk_version,
         watchos_sdk_version,
         xcodebuild_args,
-        xctestrun_template,
         xctrunner_entitlements_template):
-    substitutions = {
+    return {
         "attachment_lifetime": attachment_lifetime,
         "clean_up_simulator_action_binary": clean_up_simulator_action_binary,
         "command_line_args": command_line_args,
@@ -59,14 +58,12 @@ def _get_template_substitutions(
         "tvos_sdk_version": tvos_sdk_version,
         "visionos_sdk_version": visionos_sdk_version,
         "watchos_sdk_version": watchos_sdk_version,
-        # "ordered" isn't a special string, but anything besides "random" for this field runs in order
+        # "ordered" isn't a special string, but anything besides "random" for
+        # this field runs in order.
         "test_order": "random" if random else "ordered",
         "xcodebuild_args": xcodebuild_args,
-        "xctestrun_template": xctestrun_template,
         "xctrunner_entitlements_template": xctrunner_entitlements_template,
     }
-
-    return {"%({})s".format(key): value for key, value in substitutions.items()}
 
 def _macos_xctestrun_insert_libraries():
     return ":".join([
@@ -106,13 +103,20 @@ def _apple_xctestrun_runner_impl(ctx):
     # TODO: Remove this getattr when we drop Bazel 8
     xcode_properties_attr = getattr(apple_common, "XcodeProperties", None) or XcodeVersionPropertiesInfo
     xcode_properties = ctx.attr._xcode_config[xcode_properties_attr]
-    os_version = str(ctx.attr.os_version or _ios_simulator_version(ctx) or "")
-    device_type = ctx.attr.device_type or _ios_simulator_device(ctx) or ""
+    test_platform_type = _test_platform_type(ctx)
+    ios_simulator_version = _ios_simulator_version(ctx) if test_platform_type == "ios" else ""
+    ios_simulator_device = _ios_simulator_device(ctx) if test_platform_type == "ios" else ""
+    os_version = str(ctx.attr.os_version or ios_simulator_version or "")
+    device_type = ctx.attr.device_type or ios_simulator_device or ""
+
+    runner_config = ctx.actions.declare_file("%s.runner_config.json" % ctx.label.name)
 
     runfiles = ctx.runfiles(files = [
-        ctx.file._xctestrun_template,
+        runner_config,
+        ctx.executable._runner_binary,
         ctx.file._xctrunner_entitlements_template,
     ])
+    runfiles = runfiles.merge(ctx.attr._runner_binary[DefaultInfo].default_runfiles)
     runfiles = runfiles.merge(ctx.attr.create_simulator_action[DefaultInfo].default_runfiles)
     runfiles = runfiles.merge(ctx.attr.clean_up_simulator_action[DefaultInfo].default_runfiles)
 
@@ -131,15 +135,14 @@ def _apple_xctestrun_runner_impl(ctx):
         post_action_determines_exit_code = ctx.attr.post_action_determines_exit_code
         runfiles = runfiles.merge(ctx.attr.post_action[DefaultInfo].default_runfiles)
 
-    ctx.actions.expand_template(
-        template = ctx.file._test_template,
-        output = ctx.outputs.test_runner_template,
-        substitutions = _get_template_substitutions(
+    ctx.actions.write(
+        output = runner_config,
+        content = json.encode(_get_runner_config(
             attachment_lifetime = ctx.attr.attachment_lifetime,
             clean_up_simulator_action_binary = ctx.executable.clean_up_simulator_action.short_path,
-            command_line_args = " ".join(ctx.attr.command_line_args) if ctx.attr.command_line_args else "",
+            command_line_args = ctx.attr.command_line_args,
             create_simulator_action_binary = ctx.executable.create_simulator_action.short_path,
-            create_xcresult_bundle = "true" if ctx.attr.create_xcresult_bundle else "false",
+            create_xcresult_bundle = ctx.attr.create_xcresult_bundle,
             destination_timeout = "" if ctx.attr.destination_timeout == 0 else str(ctx.attr.destination_timeout),
             device_type = device_type,
             ios_sdk_version = str(xcode_properties.default_ios_sdk_version),
@@ -147,19 +150,18 @@ def _apple_xctestrun_runner_impl(ctx):
             macos_xctestrun_insert_libraries = _macos_xctestrun_insert_libraries(),
             os_version = os_version,
             post_action_binary = post_action_binary,
-            post_action_determines_exit_code = "true" if post_action_determines_exit_code else "false",
+            post_action_determines_exit_code = post_action_determines_exit_code,
             pre_action_binary = pre_action_binary,
             random = ctx.attr.random,
-            reuse_simulator = "true" if ctx.attr.reuse_simulator else "false",
+            reuse_simulator = ctx.attr.reuse_simulator,
             screen_capture_format = ctx.attr.screen_capture_format,
-            test_platform_type = _test_platform_type(ctx),
+            test_platform_type = test_platform_type,
             tvos_sdk_version = str(xcode_properties.default_tvos_sdk_version),
             visionos_sdk_version = str(getattr(xcode_properties, "default_visionos_sdk_version", "")),
             watchos_sdk_version = str(xcode_properties.default_watchos_sdk_version),
-            xcodebuild_args = " ".join(ctx.attr.xcodebuild_args) if ctx.attr.xcodebuild_args else "",
-            xctestrun_template = ctx.file._xctestrun_template.short_path,
+            xcodebuild_args = ctx.attr.xcodebuild_args,
             xctrunner_entitlements_template = ctx.file._xctrunner_entitlements_template.short_path,
-        ),
+        )),
     )
 
     return [
@@ -167,7 +169,8 @@ def _apple_xctestrun_runner_impl(ctx):
             execution_environment = _get_execution_environment(ctx),
             execution_requirements = ctx.attr.execution_requirements,
             test_environment = ctx.attr.test_environment,
-            test_runner_template = ctx.outputs.test_runner_template,
+            test_runner_binary = ctx.executable._runner_binary,
+            test_runner_static_config = runner_config,
         ),
         AppleDeviceTestRunnerInfo(
             device_type = device_type,
@@ -218,8 +221,8 @@ A binary that produces a UDID for a simulator that matches the given device type
 When executed, the binary will have the following environment variables available to it:
 
 <ul>
-<li>`SIMULATOR_DEVICE_TYPE`: The device type of the simulator to create. The supported types correspond to the output of `xcrun simctl list devicetypes`. E.g., iPhone 6, iPad Air. The value will either be the value of the `device_type` attribute, or the `ios_simulator_device` build setting. If empty, the default simulator creator selects a platform-appropriate device type.</li>
-<li>`SIMULATOR_OS_VERSION`: The OS version of the simulator to create. The supported OS versions correspond to the output of `xcrun simctl list runtimes`. E.g., 11.2, 9.3. The value will either be the value of the `os_version` attribute, or the `ios_simulator_version` build setting.</li>
+<li>`SIMULATOR_DEVICE_TYPE`: The device type of the simulator to create. The supported types correspond to the output of `xcrun simctl list devicetypes`. E.g., iPhone 6, iPad Air. The value will be the value of the `device_type` attribute, or for iOS runners the `ios_simulator_device` build setting. If empty, the default simulator creator selects a platform-appropriate device type.</li>
+<li>`SIMULATOR_OS_VERSION`: The OS version of the simulator to create. The supported OS versions correspond to the output of `xcrun simctl list runtimes`. E.g., 11.2, 9.3. The value will be the value of the `os_version` attribute, or for iOS runners the `ios_simulator_version` build setting.</li>
 <li>`SIMULATOR_REUSE_SIMULATOR`: Whether to reuse an existing simulator or create a new one. The value will be set to "1" if the `reuse_simulator` attribute is true, and unset otherwise. Whether or not this variable is respected should be treated as an implementation detail of the simulator creator tool.</li>
 <li>`SIMULATOR_PLATFORM_TYPE`: The Apple platform type of the simulator to create, derived from the consuming test rule.</li>
 <li>`SIMULATOR_SDK_VERSION`: The SDK version of the simulator to create. The supported SDK builds correspond to the output of `xcrun simctl runtime match list`. E.g., 11.2, 9.3. The value will be derived from the corresponding default SDK version for the current Xcode version.</li>
@@ -241,8 +244,9 @@ always use `xcodebuild test-without-building` to run the test bundle.
             doc = """
 The device type of the Apple simulator to run test. The supported types correspond
 to the output of `xcrun simctl list devicetypes`. E.g., iPhone X, iPad Air.
-The default reads from the `ios_simulator_device` build setting. If
-empty, the default simulator creator selects a platform-appropriate device type.
+For iOS runners, the default reads from the `ios_simulator_device` build setting.
+If empty, the default simulator creator selects a platform-appropriate device
+type.
 """,
         ),
         "execution_requirements": attr.string_dict(
@@ -258,8 +262,8 @@ the runner. In most common cases, this should not be used.
             doc = """
 The OS version of the Apple simulator to run test. The supported OS versions
 correspond to the output of `xcrun simctl list runtimes`. E.g., 15.5.
-The default reads the `ios_simulator_version` build setting and then falls back to the
-latest supported version.
+For iOS runners, the default reads the `ios_simulator_version` build setting and
+then falls back to the latest supported version.
 """,
         ),
         "post_action": attr.label(
@@ -322,15 +326,14 @@ Arguments to pass to `xcodebuild` when running the test bundle. This means it
 will always use `xcodebuild test-without-building` to run the test bundle.
 """,
         ),
-        "_test_template": attr.label(
-            default = Label(
-                "//apple/testing/default_runner:apple_xctestrun_runner.template.sh",
-            ),
-            allow_single_file = True,
-        ),
         "_ios_simulator_device": attr.label(
             default = Label("//apple/build_settings:ios_simulator_device"),
             providers = [BuildSettingInfo],
+        ),
+        "_runner_binary": attr.label(
+            cfg = "exec",
+            default = Label("//apple/testing/default_runner:apple_xctestrun_runner_binary"),
+            executable = True,
         ),
         "_ios_simulator_version": attr.label(
             default = Label("//apple/build_settings:ios_simulator_version"),
@@ -342,21 +345,12 @@ will always use `xcodebuild test-without-building` to run the test bundle.
                 fragment = "apple",
             ),
         ),
-        "_xctestrun_template": attr.label(
-            default = Label(
-                "//apple/testing/default_runner:apple_xctestrun_runner.template.xctestrun",
-            ),
-            allow_single_file = True,
-        ),
         "_xctrunner_entitlements_template": attr.label(
             default = Label(
                 "//apple/testing/default_runner:xctrunner_entitlements.template.plist",
             ),
             allow_single_file = True,
         ),
-    },
-    outputs = {
-        "test_runner_template": "%{name}.sh",
     },
     fragments = ["apple", "objc"],
     doc = """
